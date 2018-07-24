@@ -7,6 +7,9 @@ import os
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.manifold import Isomap, LocallyLinearEmbedding, MDS, TSNE, SpectralEmbedding
 
+weight_decay = 0.0005
+bias_initial_value = 0.01
+dropout_rate = 0.20
 
 def split_recording(data, interval_duration, step_size=32):
     n_points = data.values.shape[0]
@@ -17,7 +20,7 @@ def split_recording(data, interval_duration, step_size=32):
     
     return np.array([data.values[i * points_per_interval + j : (i + 1) * points_per_interval + j, :] for i in range(n_intervals) for j in range(0, points_per_interval, step_size) if (i + 1) * points_per_interval + j <= data.values.shape[0]])
 
-def load_data(path, class_names, is_directory=False, interval_seconds=2, step_size=32):
+def load_data(path, class_names, is_directory=False, classes_in_subdirs=False, interval_seconds=2, step_size=32):
     data = []
     labels = []
     
@@ -150,11 +153,13 @@ def reduce_dimensions(X, dim_reducer=None, n_dimensions=20):
     print("Min:", X.min(), "Max:", X.max())
     return X, dim_reducer
 
-def preprocess_data(X, Y, X_mean=None, X_std=None, n_dimensions=20, dim_reducer=None):
-    np.random.seed(0)
-    random_order = np.random.permutation(X.shape[0])
-    X = X[random_order]
-    Y = Y[random_order]
+def preprocess_data(X, Y=None, standardize=False, X_mean=None, X_std=None, reduce_dimensions=False, n_dimensions=20, dim_reducer=None, shuffle=False):
+    if shuffle:
+        np.random.seed(0)
+        random_order = np.random.permutation(X.shape[0])
+        X = X[random_order]
+        if not (Y is None):
+            Y = Y[random_order]
     X = X[:,:,1:-1] # Discarding first and last columns (Timestamps and right AUX)
     
     sampling_rate = 1.0/256 # 256Hz -> default sampling rate on 2016 Muse
@@ -164,7 +169,8 @@ def preprocess_data(X, Y, X_mean=None, X_std=None, n_dimensions=20, dim_reducer=
     X, frequencies = run_FFT(X, sampling_rate=sampling_rate)
     
     # Standardization
-    #X, X_mean, X_std = standardize_data(X, X_mean, X_std)
+    if standardize:
+        X, X_mean, X_std = standardize_data(X, X_mean, X_std)
     
     X = X.reshape((-1, X.shape[1] * X.shape[2])) # Reshaping because we want to have a 2D matrix
     print("Shape after standardization and reshaping to 2D:", X.shape)
@@ -172,7 +178,8 @@ def preprocess_data(X, Y, X_mean=None, X_std=None, n_dimensions=20, dim_reducer=
     return X, Y, X_mean, X_std, dim_reducer
     
     # Reduce dimensionality
-    X, dim_reducer = reduce_dimensionality(X, dim_reducer, n_dimensions)
+    if reduce_dimensions:
+        X, dim_reducer = reduce_dimensionality(X, dim_reducer, n_dimensions)
     
     return X, Y, X_mean, X_std, dim_reducer
 
@@ -226,17 +233,18 @@ def fully_connected_layer(name, input_data, units, dropout=True, batch_norm=Fals
         return layer
 
 def brainwave_mlp_model(input_data, n_classes):
-    layer_size = 2048
+    #layer_size = 2048
+    layer_size = 4096
     fc1 = fully_connected_layer("fc1", input_data, layer_size, dropout=False, batch_norm=False)
     fc2 = fully_connected_layer("fc2", fc1, layer_size, dropout=False, batch_norm=False)
     fc3 = fully_connected_layer("fc3", fc2, layer_size, dropout=False, batch_norm=False)
-    #fc4 = fully_connected_layer("fc4", fc2, layer_size, dropout=False, batch_norm=False)
-    #fc5 = fully_connected_layer("fc5", fc2, layer_size, dropout=False, batch_norm=False)
-    #fc6 = fully_connected_layer("fc6", fc2, layer_size, dropout=False, batch_norm=False)
+    fc4 = fully_connected_layer("fc4", fc3, layer_size, dropout=False, batch_norm=False)
+    #fc5 = fully_connected_layer("fc5", fc4, layer_size, dropout=False, batch_norm=False)
+    #fc6 = fully_connected_layer("fc6", fc5, layer_size, dropout=False, batch_norm=False)
     
     output = tf.layers.dense(
         name = "classification_logits",
-        inputs=fc3, 
+        inputs=fc4, 
         units=n_classes,
         #kernel_initializer=tf.random_uniform_initializer(minval=-0.05, maxval=0.05),
         kernel_initializer=tf.contrib.layers.variance_scaling_initializer(factor=2.0, mode='FAN_IN', uniform=False),
@@ -250,7 +258,7 @@ def brainwave_mlp_model(input_data, n_classes):
     
 
 # With dropout
-def train_model(x, neural_network_model, X, Y, test_X, test_Y, n_classes, num_epochs, batch_size, save_path):
+def train_model(x, y, is_training, neural_network_model, X, Y, test_X, test_Y, n_classes, num_epochs, batch_size, save_path):
     with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE) as scope:
         prediction = neural_network_model(x, n_classes)
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
@@ -292,16 +300,25 @@ def train_model(x, neural_network_model, X, Y, test_X, test_Y, n_classes, num_ep
 
                 print('Epoch', epoch_cnt + 1, '/', num_epochs, 'Loss:', epoch_loss, "Test:", epoch_test_accuracy)
                 #print('Epoch', epoch_cnt + 1, '/', num_epochs, 'Loss:', epoch_loss, "Validation:", epoch_validation_accuracy, "Test:", epoch_test_accuracy)
-
+            
             saver = tf.train.Saver(max_to_keep=10)
             saver.save(sess, save_path)
-            return sess
+
+def save_preprocessing_data(save_path, X_min, X_max):
+    np.save(save_path+"_X_min.npy", X_min)
+    np.save(save_path+"_X_max.npy", X_max)
+
+def load_preprocessing_data(save_path):
+    X_min = np.load(save_path+"_X_min.npy")
+    X_max = np.load(save_path+"_X_max.npy")
+
+    return X_min, X_max
 
 def load_model(path):    
     print("Entered load_model")
     sess = tf.Session()   
     saver = tf.train.import_meta_graph(path + ".meta")
-    saver.restore(sess, tf.train.latest_checkpoint('./'))
+    saver.restore(sess, tf.train.latest_checkpoint('saved_models/'))
 
     return sess
 """ 
@@ -317,7 +334,8 @@ def load_model(path):
     print sess.run(op_to_restore,feed_dict)
  """
 
-def classify(session, X, Y):
+#def classify(session, X, Y):
+def classify(session, X):
     print("Entered classify")
     graph = tf.get_default_graph()
     print(graph.get_all_collection_keys())
@@ -326,52 +344,87 @@ def classify(session, X, Y):
     y = graph.get_tensor_by_name("input_y:0")
     is_training = graph.get_tensor_by_name("input_is_training:0")
     classification_op = graph.get_tensor_by_name("classification_logits/BiasAdd:0")
+    #predictions = tf.argmax(tf.nn.softmax_cross_entropy_with_logits_v2(logits=classification_op, labels=y), 1)
+    predictions = tf.argmax(classification_op, 1)
+    correct = tf.equal(predictions, tf.argmax(y, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
 
-    feed_dict = {x: X, y: Y, is_training: False}
+    
+    #feed_dict = {x: X, y: Y, is_training: False}
+    feed_dict = {x: X, is_training: False}
+    
+    #computed_accuracy = session.run([accuracy], feed_dict)
+    #return computed_accuracy
 
-    print(session.run(classification_op, feed_dict))
+    computed_predictions = session.run([predictions], feed_dict)
+    return computed_predictions
 
 ## SCRIPT CODE
+def create_classifier():
+    #class_names = ["idle", "right_fist", "left_fist"]
+    #class_names = ["look_straight", "look_right", "look_left"]
+    class_names = ["idle", "look_right", "look_left", "eyes_closed", "jaw_clench", "smile"]
+    n_classes = len(class_names)
 
-#class_names = ["idle", "right_fist", "left_fist"]
-class_names = ["look_straight", "look_right", "look_left"]
-n_classes = len(class_names)
+    #X, Y = load_data("data/fist_clenching/", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    #X, Y = load_data("data/looking/train", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    X, Y = load_data("data/6way/train", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    X, Y, X_mean, X_std, dim_reducer = preprocess_data(X, Y, shuffle=True)
 
-#X, Y = load_data("data/fist_clenching/", class_names, is_directory=True, interval_seconds=2, step_size=32)
-X, Y = load_data("data/looking/train", class_names, is_directory=True, interval_seconds=2, step_size=32)
-X, Y, X_mean, X_std, dim_reducer = preprocess_data(X, Y, n_dimensions=50)
+    #test_X, test_Y = load_data("data", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    #test_X, test_Y = load_data("data/fist_clenching/test_data", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    #test_X, test_Y = load_data("data/looking/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    test_X, test_Y = load_data("data/6way/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    test_X, test_Y, _, _, _ = preprocess_data(test_X, test_Y, shuffle=True)
 
-#test_X, test_Y = load_data("data", class_names, is_directory=True, interval_seconds=2, step_size=32)
-#test_X, test_Y = load_data("data/fist_clenching/test_data", class_names, is_directory=True, interval_seconds=2, step_size=32)
-test_X, test_Y = load_data("data/looking/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
-test_X, test_Y, _, _, _ = preprocess_data(test_X, test_Y, X_mean=X_mean, X_std=X_std, dim_reducer=dim_reducer, n_dimensions=50)
+    X, X_min, X_max = normalize_data(X)
+    print(X.shape, X_min.shape, X_max.shape)
+    test_X, _, _ = normalize_data(test_X, X_min, X_max)
+    print(test_X.shape)
 
-X, X_min, X_max = normalize_data(X)
-print(X.shape, X_min.shape, X_max.shape)
-test_X, _, _ = normalize_data(test_X, X_min, X_max)
-print(test_X.shape)
+    Y_onehot = np.zeros((len(Y), n_classes))
+    Y_onehot[np.arange(len(Y)), Y.astype(int)] = 1
+    Y = Y_onehot
+    test_Y_onehot = np.zeros((len(test_Y), n_classes))
+    test_Y_onehot[np.arange(len(test_Y)), test_Y.astype(int)] = 1
+    test_Y = test_Y_onehot
 
-Y_onehot = np.zeros((len(Y), n_classes))
-Y_onehot[np.arange(len(Y)), Y.astype(int)] = 1
-Y = Y_onehot
-test_Y_onehot = np.zeros((len(test_Y), n_classes))
-test_Y_onehot[np.arange(len(test_Y)), test_Y.astype(int)] = 1
-test_Y = test_Y_onehot
+    n_features = X.shape[1]
+    x = tf.placeholder('float', [None, n_features], name="input_x")
+    y = tf.placeholder('float', name="input_y")
+    is_training = tf.placeholder('bool', shape=[], name="input_is_training")
+    print(x.name, y.name, is_training.name)
 
-weight_decay = 0.0005
-bias_initial_value = 0.01
-dropout_rate = 0.20
+    saved_model_path = "saved_models/brainwave-MLP-model"
+    saved_preprocessing_data_path = "saved_models/brainwave-MLP-model"
 
-n_features = X.shape[1]
-x = tf.placeholder('float', [None, n_features], name="input_x")
-y = tf.placeholder('float', name="input_y")
-is_training = tf.placeholder('bool', shape=[], name="input_is_training")
-print(x.name, y.name, is_training.name)
+    train_model(x, y, is_training, brainwave_mlp_model, X, Y, test_X, test_Y, n_classes=n_classes, num_epochs=4, batch_size=1000, save_path=saved_model_path)
+    save_preprocessing_data(saved_preprocessing_data_path, X_min, X_max)
 
-saved_model_path = "saved_models/brainwave-MLP-model"
-model = train_model(x, brainwave_mlp_model, X, Y, test_X, test_Y, n_classes=3, num_epochs=400, batch_size=1000, save_path=saved_model_path)
-del model
+    loaded_session = load_model(saved_model_path)
+    X_min, X_max = load_preprocessing_data(saved_preprocessing_data_path)
 
-loaded_session = load_model(saved_model_path)
-classify(loaded_session, test_X, test_Y)
+    return loaded_session, X_min, X_max
 
+    #test_X, test_Y = load_data("data/looking/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    test_X, test_Y = load_data("data/6way/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    test_X, test_Y, _, _, _ = preprocess_data(test_X, test_Y, shuffle=True)
+    test_X, _, _ = normalize_data(test_X, X_min, X_max)
+
+    test_Y_onehot = np.zeros((len(test_Y), n_classes))
+    test_Y_onehot[np.arange(len(test_Y)), test_Y.astype(int)] = 1
+    test_Y = test_Y_onehot
+
+    #classify(loaded_session, test_X, test_Y)
+
+    return loaded_session, X_min, X_max
+
+def preprocess_and_classify(session, test_X, X_min, X_max):
+    test_X, _, _, _, _ = preprocess_data(test_X)
+    test_X, _, _ = normalize_data(test_X, X_min, X_max)
+
+    return classify(session, test_X)
+
+#classifier, X_min, X_max = create_classifier()
+#test_X, test_Y = load_data("data/6way/test", ["idle", "look_right", "look_left", "eyes_closed", "jaw_clench", "smile"], is_directory=True, interval_seconds=2, step_size=32)
+#preprocess_and_classify(classifier, test_X, X_min, X_max)
