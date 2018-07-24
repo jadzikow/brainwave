@@ -26,7 +26,11 @@ def load_data(path, class_names, is_directory=False, classes_in_subdirs=False, i
     
     data_files = []
     if is_directory:
-        data_files = [os.path.join(path, file) for file in os.listdir(path) if file.lower().endswith(".csv")]
+        if classes_in_subdirs:
+            subdir_paths = [os.path.join(path,d) for d in os.listdir(path) if os.path.isdir(os.path.join(path, d)) and d in class_names] 
+            data_files = [os.path.join(subdir_path, file) for subdir_path in subdir_paths for file in os.listdir(subdir_path) if file.lower().endswith(".csv")]
+        else:
+            data_files = [os.path.join(path, file) for file in os.listdir(path) if file.lower().endswith(".csv")]
     else:
         if not path.lower().endswith(".csv"):
             raise Exception("File is not a CSV file!")
@@ -38,11 +42,16 @@ def load_data(path, class_names, is_directory=False, classes_in_subdirs=False, i
         
         data.append(split_data)
         
-        class_id = class_names.index("_".join(os.path.basename(file).split("_")[:-1]))
+        class_id = None
+        if classes_in_subdirs:
+            class_id = class_names.index(os.path.basename(os.path.dirname(file)))
+        else:
+            class_id = class_names.index("_".join(os.path.basename(file).split("_")[:-1]))
         labels.append(class_id * np.ones(split_data.shape[0]))
     
     data = np.concatenate(data)
     labels = np.concatenate(labels)
+    print(labels.shape)
 
     return data, labels
        
@@ -60,9 +69,9 @@ def run_FFT(X, sampling_rate=(1.0/256)):
     n_desired_freqs = 112
     #freq = freq[:n_desired_freqs]
 
-    print(freq.shape, freq.max())
-    print(freq)
-    print([i for i in range(len(freq)) if abs(freq[i] - 60) <= 0.5])
+    #print(freq.shape, freq.max())
+    #print(freq)
+    #print([i for i in range(len(freq)) if abs(freq[i] - 60) <= 0.5])
     
     fft_transformed = []
 
@@ -119,24 +128,24 @@ def run_FFT(X, sampling_rate=(1.0/256)):
         fft_transformed.append(transformed)
 
     fft_transformed = np.array(fft_transformed)
-    print("fft transformed shape", fft_transformed.shape)
+    #print("fft transformed shape", fft_transformed.shape)
     
     return fft_transformed, freq
 
 def standardize_data(X, X_mean=None, X_std=None):
-    print("Standardizing data")
+    #print("Standardizing data")
     if X_mean is None or X_std is None:
         X_mean = X.mean(axis=(0,1), keepdims=True)
         X_std = X.std(axis=(0,1), keepdims=True)
-    print("X max", X.max(), "X min", X.min(), "X mean", X_mean, "X std", X_std)
+    #print("X max", X.max(), "X min", X.min(), "X mean", X_mean, "X std", X_std)
     return (X - X_mean) / X_std, X_mean, X_std
 
 def normalize_data(X, X_min=None, X_max=None):
-    print("Normalizing data")
+    #print("Normalizing data")
     if X_min is None or X_max is None:
         X_min = X.min(axis=0, keepdims=True)
         X_max = X.max(axis=0, keepdims=True)
-    print(X.shape, X_min.shape, X_max.shape)
+    #print(X.shape, X_min.shape, X_max.shape)
     return (X - X_min) / (X_max - X_min), X_min, X_max
 
 def reduce_dimensions(X, dim_reducer=None, n_dimensions=20):
@@ -173,7 +182,7 @@ def preprocess_data(X, Y=None, standardize=False, X_mean=None, X_std=None, reduc
         X, X_mean, X_std = standardize_data(X, X_mean, X_std)
     
     X = X.reshape((-1, X.shape[1] * X.shape[2])) # Reshaping because we want to have a 2D matrix
-    print("Shape after standardization and reshaping to 2D:", X.shape)
+    #print("Shape after reshaping to 2D:", X.shape)
     
     return X, Y, X_mean, X_std, dim_reducer
     
@@ -211,7 +220,7 @@ def pool_layer(input_data, pool_size):
         strides=2,
         padding="valid")
 
-def fully_connected_layer(name, input_data, units, dropout=True, batch_norm=False):
+def fully_connected_layer(name, input_data, units, dropout=True, batch_norm=False, is_training=None):
     with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
         layer = tf.layers.dense(
             inputs=input_data,
@@ -232,15 +241,17 @@ def fully_connected_layer(name, input_data, units, dropout=True, batch_norm=Fals
 
         return layer
 
-def brainwave_mlp_model(input_data, n_classes):
-    #layer_size = 2048
-    layer_size = 4096
-    fc1 = fully_connected_layer("fc1", input_data, layer_size, dropout=False, batch_norm=False)
-    fc2 = fully_connected_layer("fc2", fc1, layer_size, dropout=False, batch_norm=False)
-    fc3 = fully_connected_layer("fc3", fc2, layer_size, dropout=False, batch_norm=False)
-    fc4 = fully_connected_layer("fc4", fc3, layer_size, dropout=False, batch_norm=False)
-    #fc5 = fully_connected_layer("fc5", fc4, layer_size, dropout=False, batch_norm=False)
-    #fc6 = fully_connected_layer("fc6", fc5, layer_size, dropout=False, batch_norm=False)
+def brainwave_mlp_model(input_data, n_classes, is_training):
+    layer_size = 2048
+    #layer_size = 4096
+    use_dropout = False
+    use_batch_norm = False
+    fc1 = fully_connected_layer("fc1", input_data, layer_size, dropout=use_dropout, batch_norm=use_batch_norm, is_training=is_training)
+    fc2 = fully_connected_layer("fc2", fc1, layer_size, dropout=use_dropout, batch_norm=use_batch_norm, is_training=is_training)
+    fc3 = fully_connected_layer("fc3", fc2, layer_size, dropout=use_dropout, batch_norm=use_batch_norm, is_training=is_training)
+    fc4 = fully_connected_layer("fc4", fc3, layer_size, dropout=use_dropout, batch_norm=use_batch_norm, is_training=is_training)
+    #fc5 = fully_connected_layer("fc5", fc4, layer_size, dropout=use_dropout, batch_norm=use_batch_norm, is_training=is_training)
+    #fc6 = fully_connected_layer("fc6", fc5, layer_size, dropout=use_dropout, batch_norm=use_batch_norm, is_training=is_training)
     
     output = tf.layers.dense(
         name = "classification_logits",
@@ -260,7 +271,7 @@ def brainwave_mlp_model(input_data, n_classes):
 # With dropout
 def train_model(x, y, is_training, neural_network_model, X, Y, test_X, test_Y, n_classes, num_epochs, batch_size, save_path):
     with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE) as scope:
-        prediction = neural_network_model(x, n_classes)
+        prediction = neural_network_model(x, n_classes, is_training)
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
         loss += tf.losses.get_regularization_loss()
         optimizer = tf.train.AdamOptimizer().minimize(loss)
@@ -336,9 +347,9 @@ def load_model(path):
 
 #def classify(session, X, Y):
 def classify(session, X):
-    print("Entered classify")
+    #print("Entered classify")
     graph = tf.get_default_graph()
-    print(graph.get_all_collection_keys())
+    #print(graph.get_all_collection_keys())
 
     x = graph.get_tensor_by_name("input_x:0")
     y = graph.get_tensor_by_name("input_y:0")
@@ -356,7 +367,7 @@ def classify(session, X):
     #computed_accuracy = session.run([accuracy], feed_dict)
     #return computed_accuracy
 
-    computed_predictions = session.run([predictions], feed_dict)
+    computed_predictions = session.run(predictions, feed_dict)
     return computed_predictions
 
 ## SCRIPT CODE
@@ -368,13 +379,13 @@ def create_classifier():
 
     #X, Y = load_data("data/fist_clenching/", class_names, is_directory=True, interval_seconds=2, step_size=32)
     #X, Y = load_data("data/looking/train", class_names, is_directory=True, interval_seconds=2, step_size=32)
-    X, Y = load_data("data/6way/train", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    X, Y = load_data("data/6way/train", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=2, step_size=32)
     X, Y, X_mean, X_std, dim_reducer = preprocess_data(X, Y, shuffle=True)
 
     #test_X, test_Y = load_data("data", class_names, is_directory=True, interval_seconds=2, step_size=32)
     #test_X, test_Y = load_data("data/fist_clenching/test_data", class_names, is_directory=True, interval_seconds=2, step_size=32)
     #test_X, test_Y = load_data("data/looking/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
-    test_X, test_Y = load_data("data/6way/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
+    test_X, test_Y = load_data("data/6way/test", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=2, step_size=32)
     test_X, test_Y, _, _, _ = preprocess_data(test_X, test_Y, shuffle=True)
 
     X, X_min, X_max = normalize_data(X)
@@ -398,7 +409,7 @@ def create_classifier():
     saved_model_path = "saved_models/brainwave-MLP-model"
     saved_preprocessing_data_path = "saved_models/brainwave-MLP-model"
 
-    train_model(x, y, is_training, brainwave_mlp_model, X, Y, test_X, test_Y, n_classes=n_classes, num_epochs=4, batch_size=1000, save_path=saved_model_path)
+    train_model(x, y, is_training, brainwave_mlp_model, X, Y, test_X, test_Y, n_classes=n_classes, num_epochs=100, batch_size=1000, save_path=saved_model_path)
     save_preprocessing_data(saved_preprocessing_data_path, X_min, X_max)
 
     loaded_session = load_model(saved_model_path)
@@ -408,7 +419,7 @@ def create_classifier():
 
     #test_X, test_Y = load_data("data/looking/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
     test_X, test_Y = load_data("data/6way/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
-    test_X, test_Y, _, _, _ = preprocess_data(test_X, test_Y, shuffle=True)
+    test_X, test_Y, _, _, _ = preprocess_data(test_X, test_Y, shuffle=False)
     test_X, _, _ = normalize_data(test_X, X_min, X_max)
 
     test_Y_onehot = np.zeros((len(test_Y), n_classes))
@@ -425,6 +436,59 @@ def preprocess_and_classify(session, test_X, X_min, X_max):
 
     return classify(session, test_X)
 
+class Classifier:
+
+    def __init__(self):
+        #class_names = ["idle", "right_fist", "left_fist"]
+        #class_names = ["look_straight", "look_right", "look_left"]
+        class_names = ["idle", "look_right", "look_left", "eyes_closed", "jaw_clench", "smile"]
+        n_classes = len(class_names)
+
+        #X, Y = load_data("data/fist_clenching/", class_names, is_directory=True, interval_seconds=2, step_size=32)
+        #X, Y = load_data("data/looking/train", class_names, is_directory=True, interval_seconds=2, step_size=32)
+        X, Y = load_data("data/6way/train", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=2, step_size=32)
+        X, Y, X_mean, X_std, dim_reducer = preprocess_data(X, Y, shuffle=True)
+
+        #test_X, test_Y = load_data("data", class_names, is_directory=True, interval_seconds=2, step_size=32)
+        #test_X, test_Y = load_data("data/fist_clenching/test_data", class_names, is_directory=True, interval_seconds=2, step_size=32)
+        #test_X, test_Y = load_data("data/looking/test", class_names, is_directory=True, interval_seconds=2, step_size=32)
+        test_X, test_Y = load_data("data/6way/test", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=2, step_size=32)
+        test_X, test_Y, _, _, _ = preprocess_data(test_X, test_Y, shuffle=True)
+
+        X, X_min, X_max = normalize_data(X)
+        print(X.shape, X_min.shape, X_max.shape)
+        test_X, _, _ = normalize_data(test_X, X_min, X_max)
+        print(test_X.shape)
+
+        Y_onehot = np.zeros((len(Y), n_classes))
+        Y_onehot[np.arange(len(Y)), Y.astype(int)] = 1
+        Y = Y_onehot
+        test_Y_onehot = np.zeros((len(test_Y), n_classes))
+        test_Y_onehot[np.arange(len(test_Y)), test_Y.astype(int)] = 1
+        test_Y = test_Y_onehot
+
+        n_features = X.shape[1]
+        x = tf.placeholder('float', [None, n_features], name="input_x")
+        y = tf.placeholder('float', name="input_y")
+        is_training = tf.placeholder('bool', shape=[], name="input_is_training")
+        print(x.name, y.name, is_training.name)
+
+        saved_model_path = "saved_models/brainwave-MLP-model"
+        saved_preprocessing_data_path = "saved_models/brainwave-MLP-model"
+
+        train_model(x, y, is_training, brainwave_mlp_model, X, Y, test_X, test_Y, n_classes=n_classes, num_epochs=10, batch_size=1000, save_path=saved_model_path)
+        save_preprocessing_data(saved_preprocessing_data_path, X_min, X_max)
+
+        self.session = load_model(saved_model_path)
+        self.X_min, self.X_max = load_preprocessing_data(saved_preprocessing_data_path)
+
+    def preprocess_and_classify(self, test_X):
+        test_X, _, _, _, _ = preprocess_data(test_X)
+        test_X, _, _ = normalize_data(test_X, self.X_min, self.X_max)
+        return classify(self.session, test_X)
+
+
 #classifier, X_min, X_max = create_classifier()
 #test_X, test_Y = load_data("data/6way/test", ["idle", "look_right", "look_left", "eyes_closed", "jaw_clench", "smile"], is_directory=True, interval_seconds=2, step_size=32)
 #preprocess_and_classify(classifier, test_X, X_min, X_max)
+
