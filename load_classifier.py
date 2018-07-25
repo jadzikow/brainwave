@@ -7,11 +7,11 @@ import brainwave
 #classifier, X_min, X_max = brainwave.create_classifier()
 #class_names = ["idle", "look_right", "look_left", "eyes_closed", "jaw_clench", "smile"]
 class_names = ["idle", "look_right", "look_left", "jaw_clench", "smile"]
-classifier = brainwave.Classifier(class_names, train_from_scratch=True)
+classifier = brainwave.Classifier(class_names, train_from_scratch=False)
 
 #class_names = ["idle", "up", "down"]
 #test_X, test_Y = brainwave.load_data("data/6way/test", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=2, step_size=32)
-test_X, test_Y = brainwave.load_data("data/5way/test", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=1, step_size=32)
+test_X, test_Y = brainwave.load_data("data/5way/test", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=2, step_size=32)
 #test_X, test_Y = brainwave.load_data("data/mental/test", class_names, is_directory=True, classes_in_subdirs=True, interval_seconds=2, step_size=32)
 #predictions = brainwave.preprocess_and_classify(classifier, test_X, X_min, X_max)
 predictions = classifier.preprocess_and_classify(test_X)
