@@ -1,2 +1,4 @@
 .ipynb_checkpoints
 saved_models
+__pycache__
+tpot_exported_pipeline.py
